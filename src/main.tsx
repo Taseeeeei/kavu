@@ -11,11 +11,16 @@ createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictM
 
 if ('serviceWorker' in navigator) registerSW({ immediate: true });
 
-(async () => {
-  await requestPersistence();
-  await recordSnapshot().catch(() => undefined);
+const autoSync = async () => {
   if (navigator.onLine && (await shouldAutoSync())) {
     await syncAll().catch(() => undefined);
     await recordSnapshot().catch(() => undefined);
   }
+};
+(async () => {
+  await requestPersistence();
+  await recordSnapshot().catch(() => undefined);
+  await autoSync();
 })();
+// アプリに戻ったとき（ホーム画面アプリの再表示を含む）にも間隔を確認する
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoSync(); });

@@ -3,6 +3,8 @@ import { loadSettings, saveSettings } from '../db/settings';
 import { addPrice, laterThan } from '../db/repo';
 import { latestRecorded } from '../domain/portfolio';
 import { JQuantsProvider, PLAN_LABEL } from '../data/jquants';
+import { fetchSheetQuotes } from '../data/sheetPrices';
+import { toYmd } from '../domain/util';
 import { RateLimitError, ProviderConfigError } from '../data/provider';
 import { toDpsPoints, dpsChanges, latestForecast, detectDividendChange } from '../domain/dividendChange';
 import { computePosition } from '../domain/position';
@@ -26,7 +28,7 @@ const log = (level: 'info' | 'warn' | 'error', message: string) => db.syncLogs.a
 const marketFromName = (n: string): Market | null =>
   n.includes('プライム') ? 'TSE_PRIME' : n.includes('スタンダード') ? 'TSE_STANDARD' : n.includes('グロース') ? 'TSE_GROWTH' : null;
 
-export function isSyncConfigured(s: { proxyUrl: string }) { return !!s.proxyUrl.trim(); }
+export function isSyncConfigured(s: { proxyUrl: string; sheetUrl?: string }) { return !!s.proxyUrl.trim() || !!s.sheetUrl?.trim(); }
 
 let running: Promise<SyncReport> | null = null;
 
@@ -42,19 +44,49 @@ async function doSync({ onProgress, reg }: { onProgress?: (msg: string) => void;
   const report: SyncReport = { ok: true, startedAt: new Date().toISOString(), finishedAt: '', prices: 0, forecasts: 0, newEvents: [], historyEvents: 0, errors: [], skipped: [] };
   if (!isSyncConfigured(settings)) {
     report.ok = false;
-    report.errors.push('自動取得は未設定です（設定 → データ取得 でプロキシURLを登録してください）');
+    report.errors.push('自動取得は未設定です（設定 → データ取得 で登録してください）');
     return report;
   }
-  const provider = new JQuantsProvider(settings.proxyUrl, settings.proxyToken, settings.jquantsPlan);
-  const planNote = `プラン: ${PLAN_LABEL[settings.jquantsPlan] ?? settings.jquantsPlan}`;
   const secs = (await db.securities.toArray()).filter((s) => !s.deletedAt);
   const trades = await db.trades.toArray();
-  const targets: { sec: Security; shares: number }[] = [];
+  const held: { sec: Security; shares: number }[] = [];
   for (const sec of secs) {
     const shares = computePosition(trades.filter((t) => t.securityId === sec.id)).quantity;
-    if (shares <= 0) continue;
-    if (!provider.supports(sec.country)) { report.skipped.push(`${sec.name}（${sec.code}）: 自動取得の対象外の市場です`); continue; }
-    targets.push({ sec, shares });
+    if (shares > 0) held.push({ sec, shares });
+  }
+
+  // 1) Googleスプレッドシート（無料・最大20分遅延）の株価
+  const sheetPriced = new Set<string>();
+  if (settings.sheetUrl.trim()) {
+    onProgress?.('スプレッドシートから株価を取得中…');
+    try {
+      const { quotes, invalid } = await fetchSheetQuotes(settings.sheetUrl.trim());
+      const byCode = new Map(quotes.map((q) => [q.code, q]));
+      for (const { sec } of held) {
+        if (sec.country !== 'JP') continue;
+        const q = byCode.get(sec.code);
+        if (!q) { if (!invalid.includes(sec.code)) report.skipped.push(`${sec.name}（${sec.code}）: スプレッドシートにコードがありません`); continue; }
+        const asOf = q.date ?? toYmd(new Date());
+        await addPrice({ securityId: sec.id, price: q.price, prevClose: q.prevClose, asOf, source: 'gsheet', sourceDetail: `GOOGLEFINANCE（最大20分遅延）・${q.date ? `取引時刻 ${q.date}` : '取引時刻不明'}` });
+        sheetPriced.add(sec.id);
+        report.prices++;
+      }
+      for (const c of invalid) report.skipped.push(`${c}: スプレッドシートの株価が数値ではありません（#N/A など）`);
+    } catch (e) {
+      const msg = `スプレッドシート: ${(e as Error).message}`;
+      report.errors.push(msg);
+      await log('error', msg);
+    }
+  }
+  if (!settings.proxyUrl.trim()) return finish(report, settings);
+
+  // 2) J-Quants（株価はスプレッドシートで取れた銘柄は省略、配当予想と増減配はすべて）
+  const provider = new JQuantsProvider(settings.proxyUrl, settings.proxyToken, settings.jquantsPlan);
+  const planNote = `プラン: ${PLAN_LABEL[settings.jquantsPlan] ?? settings.jquantsPlan}`;
+  const targets: { sec: Security; shares: number }[] = [];
+  for (const t of held) {
+    if (!provider.supports(t.sec.country)) { report.skipped.push(`${t.sec.name}（${t.sec.code}）: 自動取得の対象外の市場です`); continue; }
+    targets.push(t);
   }
 
   for (let i = 0; i < targets.length; i++) {
@@ -62,8 +94,8 @@ async function doSync({ onProgress, reg }: { onProgress?: (msg: string) => void;
     onProgress?.(`${i + 1}/${targets.length} ${sec.name} を取得中…`);
     try {
       // 株価
-      const q = await provider.getQuote(sec.code);
-      if (q) {
+      const q = sheetPriced.has(sec.id) ? null : await provider.getQuote(sec.code);
+      if (sheetPriced.has(sec.id)) { /* スプレッドシートで取得済み */ } else if (q) {
         await addPrice({ securityId: sec.id, price: q.close, prevClose: q.prevClose, marketCap: q.marketCap, asOf: q.date, source: 'jquants', sourceDetail: `日足終値（${q.date}）・${planNote}` });
         report.prices++;
       } else report.skipped.push(`${sec.name}（${sec.code}）: 株価データが見つかりません`);
@@ -109,6 +141,10 @@ async function doSync({ onProgress, reg }: { onProgress?: (msg: string) => void;
       if (e instanceof RateLimitError || e instanceof ProviderConfigError) { report.ok = false; break; }
     }
   }
+  return finish(report, settings, reg);
+}
+
+async function finish(report: SyncReport, settings: Awaited<ReturnType<typeof loadSettings>>, reg?: ServiceWorkerRegistration): Promise<SyncReport> {
   report.finishedAt = new Date().toISOString();
   if (report.errors.length) report.ok = false;
   await saveSettings({ lastSyncAt: report.finishedAt });

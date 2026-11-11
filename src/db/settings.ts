@@ -5,6 +5,7 @@ export interface AppSettings {
   taxRate: number;
   colorScheme: 'global' | 'japan'; // global: 上昇=緑 / japan: 上昇=赤
   proxyUrl: string;
+  sheetUrl: string; // GOOGLEFINANCE を公開したCSVのURL
   proxyToken: string;
   jquantsPlan: 'free' | 'light' | 'standard' | 'premium';
   autoSyncHours: number; // 0 = 自動同期しない
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   taxRate: DEFAULT_TAX_RATE,
   colorScheme: 'global',
   proxyUrl: '',
+  sheetUrl: '',
   proxyToken: '',
   jquantsPlan: 'free',
   autoSyncHours: 12,

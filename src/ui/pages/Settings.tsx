@@ -8,6 +8,8 @@ import { exportJson, restoreJson, validateBackup, restoreSecurity, purgeSecurity
 import { exportCsv, importCsv, csvTemplate, CSV_HEADERS, type CsvKind } from '../../services/csvio';
 import { decodeCsvBytes } from '../../domain/csv';
 import { JQuantsProvider, PLAN_LABEL } from '../../data/jquants';
+import { checkSheetUrl, fetchSheetQuotes } from '../../data/sheetPrices';
+import { useHoldings } from '../hooks';
 import { syncAll } from '../../services/sync';
 import { notificationSupport, requestNotificationPermission, showSystemNotifications } from '../../services/notify';
 import { canPromptInstall, onInstallChange, promptInstall, isIos } from '../../services/install';
@@ -23,6 +25,8 @@ export default function Settings() {
   const confirm = useConfirm();
   const loc = useLocation();
   const [proxyUrl, setProxyUrl] = useState('');
+  const [sheetUrl, setSheetUrl] = useState('');
+  const holdings = useHoldings();
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
@@ -36,7 +40,7 @@ export default function Settings() {
   const logs = useLiveQuery(() => db.syncLogs.orderBy('at').reverse().limit(8).toArray(), []);
   const support = notificationSupport();
 
-  useEffect(() => { setProxyUrl(s.proxyUrl); setToken(s.proxyToken); }, [s.proxyUrl, s.proxyToken]);
+  useEffect(() => { setProxyUrl(s.proxyUrl); setToken(s.proxyToken); setSheetUrl(s.sheetUrl); }, [s.proxyUrl, s.proxyToken, s.sheetUrl]);
   useEffect(() => { const off = onInstallChange(() => force((x) => x + 1)); return () => { off(); }; }, []);
   useEffect(() => {
     navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
@@ -49,6 +53,28 @@ export default function Settings() {
     if (u && !/^https:\/\//.test(u) && !/^http:\/\/(localhost|127\.0\.0\.1)/.test(u)) return toast('プロキシURLは https:// で始まる必要があります');
     await saveSettings({ proxyUrl: u, proxyToken: token.trim() });
     toast('保存しました');
+  };
+  const jpCodes = (holdings ?? []).filter((h) => h.security.country === 'JP').map((h) => h.security.code);
+  const copyCodes = async () => {
+    const text = jpCodes.join('\n');
+    try { await navigator.clipboard.writeText(text); toast(`${jpCodes.length}銘柄のコードをコピーしました。スプレッドシートのA2セルに貼り付けてください`); }
+    catch { await confirm({ title: '銘柄コード', message: <textarea readOnly value={text} style={{ minHeight: 160 }} />, okLabel: '閉じる' }); }
+  };
+  const saveSheet = async () => {
+    const err = checkSheetUrl(sheetUrl);
+    if (err) return toast(err);
+    await saveSettings({ sheetUrl: sheetUrl.trim() });
+    toast(sheetUrl.trim() ? '保存しました' : 'スプレッドシート連携を解除しました');
+  };
+  const testSheet = async () => {
+    const err = checkSheetUrl(sheetUrl);
+    if (err) return toast(err);
+    try {
+      setBusy('読み込み中…');
+      const r = await fetchSheetQuotes(sheetUrl.trim());
+      const missing = jpCodes.filter((c) => !r.quotes.some((q) => q.code === c));
+      toast(`読み込みOK：${r.quotes.length}銘柄の株価${r.invalid.length ? `・取得できないコード ${r.invalid.join(', ')}` : ''}${missing.length ? `・未記入の保有銘柄 ${missing.join(', ')}` : ''}`);
+    } catch (e) { toast((e as Error).message); } finally { setBusy(null); }
   };
   const test = async () => {
     try {
@@ -99,7 +125,29 @@ export default function Settings() {
 
   return (
     <>
-      <Card title="データ取得（株価・配当予想）"><div id="data-source" />
+      <Card title="株価の自動取得（無料：Googleスプレッドシート）"><div id="data-source" />
+        <div className="notice" style={{ marginBottom: 12 }}>
+          Googleスプレッドシートの <strong>GOOGLEFINANCE</strong> 関数で株価を取得し、その表をアプリが読み込みます。無料で、株価は最大20分ほど遅れます。配当予想は取得できません。
+        </div>
+        <ol className="small" style={{ paddingLeft: 20, margin: '0 0 12px' }}>
+          <li>Googleスプレッドシートで新しい表を作ります。</li>
+          <li>1行目に見出し（A1: コード、B1: 株価、C1: 前日終値、D1: 時刻）を入れます。</li>
+          <li><button className="btn small" onClick={copyCodes} disabled={jpCodes.length === 0}>保有銘柄のコードをコピー</button> を押し、A2セルに貼り付けます。</li>
+          <li>B2〜D2に次の式を入れ、表の下まで同じ式をコピーします。<div className="notice" style={{ marginTop: 4, userSelect: 'all', fontFamily: 'monospace', fontSize: 12 }}>=GOOGLEFINANCE("TYO:"&amp;A2,"price")<br />=GOOGLEFINANCE("TYO:"&amp;A2,"closeyest")<br />=GOOGLEFINANCE("TYO:"&amp;A2,"tradetime")</div></li>
+          <li>メニューの「ファイル」→「共有」→「ウェブに公開」を開き、形式を「カンマ区切り形式（.csv）」にして「公開」を押します。</li>
+          <li>表示されたURLを下に貼り付けて「保存」します。銘柄を追加したら、スプレッドシートにもコードを追加してください。</li>
+        </ol>
+        <div className="field"><label>自動更新の間隔（J-Quantsと共通）</label><select value={s.autoSyncHours} onChange={(e) => saveSettings({ autoSyncHours: Number(e.target.value) })}><option value={0}>自動更新しない</option><option value={1}>1時間ごと</option><option value={6}>6時間ごと</option><option value={12}>12時間ごと</option><option value={24}>1日ごと</option></select><span className="hint">アプリを開いたとき・画面に戻ったときに、間隔を過ぎていれば更新します</span></div>
+        <div className="field"><label>公開したCSVのURL</label><input type="url" placeholder="https://docs.google.com/spreadsheets/d/e/…/pub?output=csv" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} /></div>
+        <div className="grid3">
+          <button className="btn primary" onClick={saveSheet}>保存</button>
+          <button className="btn" onClick={testSheet} disabled={!!busy || !sheetUrl}>読み込みテスト</button>
+          <button className="btn" onClick={runSync} disabled={!!busy || (!s.sheetUrl && !s.proxyUrl)}>{busy ?? '今すぐ取得'}</button>
+        </div>
+        <div className="tiny dim" style={{ marginTop: 8 }}>公開した表は、URLを知っている人なら誰でも見られます（入れるのは銘柄コードと株価だけで、保有株数などは入りません）。</div>
+      </Card>
+
+      <Card title="株価・配当予想の自動取得（J-Quants）">
         <div className="notice" style={{ marginBottom: 12 }}>
           情報源は <a href="https://jpx-jquants.com/" target="_blank" rel="noopener noreferrer">J-Quants API（JPX公式）</a> です。APIキーはこのアプリには保存せず、ご自身でデプロイするプロキシ（同梱の Cloudflare Worker）にだけ保存します。<br />
           無料プランは<strong>データが12週間遅延</strong>し、毎分5回までです。株価・配当予想には必ず取得日時と情報源を表示します。<br />
@@ -109,7 +157,7 @@ export default function Settings() {
         <div className="field"><label>アクセストークン（プロキシ側で設定した値）</label><input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" /><span className="hint">他人にプロキシを使われないための合言葉です。J-QuantsのAPIキーではありません。バックアップには含まれません。</span></div>
         <div className="grid2">
           <div className="field"><label>J-Quantsのプラン</label><select value={s.jquantsPlan} onChange={(e) => saveSettings({ jquantsPlan: e.target.value as typeof s.jquantsPlan })}>{Object.entries(PLAN_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
-          <div className="field"><label>自動更新の間隔</label><select value={s.autoSyncHours} onChange={(e) => saveSettings({ autoSyncHours: Number(e.target.value) })}><option value={0}>自動更新しない</option><option value={6}>6時間ごと</option><option value={12}>12時間ごと</option><option value={24}>1日ごと</option></select><span className="hint">アプリを開いたときに間隔を過ぎていれば更新します</span></div>
+          <div className="field"><label>自動更新の間隔</label><select value={s.autoSyncHours} onChange={(e) => saveSettings({ autoSyncHours: Number(e.target.value) })}><option value={0}>自動更新しない</option><option value={1}>1時間ごと</option><option value={6}>6時間ごと</option><option value={12}>12時間ごと</option><option value={24}>1日ごと</option></select><span className="hint">アプリを開いたときに間隔を過ぎていれば更新します</span></div>
         </div>
         <div className="grid3">
           <button className="btn primary" onClick={saveApi}>保存</button>

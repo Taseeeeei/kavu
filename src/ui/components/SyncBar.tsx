@@ -28,7 +28,7 @@ export function SyncBar() {
   };
   return (
     <div className="sync-bar">
-      <span className="pill">J-Quants</span>
+      <span className="pill">{[s.sheetUrl && "スプレッドシート", s.proxyUrl && "J-Quants"].filter(Boolean).join("＋")}</span>
       <span>最終取得 {dateTime(s.lastSyncAt)}</span>
       <span className="grow" />
       <button className="btn small" onClick={run} disabled={!!busy || !online}><IRefresh width={16} height={16} />{busy ?? (online ? '今すぐ更新' : 'オフライン')}</button>

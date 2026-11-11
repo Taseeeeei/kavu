@@ -133,3 +133,30 @@ describe('J-Quants 同期（モック）', () => {
     expect(r.errors[0]).toContain('未設定');
   });
 });
+
+describe('Googleスプレッドシート（GOOGLEFINANCE）の株価', () => {
+  it('公開CSVから株価・前日終値・日付を取り込み、J-Quantsなしでも動く', async () => {
+    const { parseSheetCsv, checkSheetUrl } = await import('../src/data/sheetPrices');
+    const p = parseSheetCsv('コード,株価,前日終値,時刻\r\n8058,"￥3,012",2990,2026/11/11 15:30:00\r\nTYO:9432,155.2,154.9,\r\n9999,#N/A,#N/A,#N/A\r\n');
+    expect(p.quotes).toEqual([{ code: '8058', price: 3012, prevClose: 2990, date: '2026-11-11' }, { code: '9432', price: 155.2, prevClose: 154.9, date: null }]);
+    expect(p.invalid).toEqual(['9999']);
+    expect(checkSheetUrl('https://docs.google.com/spreadsheets/d/abc/edit#gid=0')).not.toBeNull();
+    expect(checkSheetUrl('https://docs.google.com/spreadsheets/d/e/xyz/pub?gid=0&single=true&output=csv')).toBeNull();
+
+    const s = await createSecurity({ ...base, code: '8058', name: '三菱商事' });
+    await saveTrade({ securityId: s.id, side: 'buy', date: '2024-01-10', quantity: 100, price: 2500, fee: 0, memo: '' });
+    const url = 'https://docs.google.com/spreadsheets/d/e/xyz/pub?output=csv';
+    await saveSettings({ sheetUrl: url, proxyUrl: '' });
+    vi.stubGlobal('fetch', vi.fn(async (u: string) => {
+      expect(u.startsWith(url)).toBe(true);
+      return new Response('コード,株価,前日終値,時刻\n8058,3012,2990,2026/11/11 15:30:00\n', { status: 200 });
+    }));
+    const r = await syncAll();
+    expect(r.errors).toEqual([]);
+    expect(r.prices).toBe(1);
+    const h = (await loadHoldings())[0];
+    expect(h.price).toMatchObject({ price: 3012, prevClose: 2990, asOf: '2026-11-11', source: 'gsheet' });
+    expect(h.dayChange).toBe(22);
+    vi.unstubAllGlobals();
+  });
+});

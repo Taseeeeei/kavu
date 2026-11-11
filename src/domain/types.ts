@@ -19,11 +19,12 @@ export const MARKET_LABELS: Record<Market, string> = {
 export type AccountType = 'taxable' | 'nisa';
 
 /** データの出所。表示時に必ず明示する。 */
-export type DataSource = 'manual' | 'jquants' | 'csv';
+export type DataSource = 'manual' | 'jquants' | 'csv' | 'gsheet';
 export const SOURCE_LABELS: Record<DataSource, string> = {
   manual: '手動入力',
   jquants: 'J-Quants API（JPX公式）',
   csv: 'CSVインポート',
+  gsheet: 'Googleスプレッドシート（GOOGLEFINANCE）',
 };
 
 export interface Security {

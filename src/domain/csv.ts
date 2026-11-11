@@ -58,7 +58,7 @@ export function decodeCsvBytes(buf: ArrayBuffer): string {
 
 export const parseNumber = (s: string): number | null => {
   if (s === undefined || s === null) return null;
-  const t = String(s).replace(/[,，円¥\s]/g, '').replace(/[０-９．－]/g, (c) =>
+  const t = String(s).replace(/[,，円¥￥\s]/g, '').replace(/[０-９．－]/g, (c) =>
     c === '．' ? '.' : c === '－' ? '-' : String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   if (t === '') return null;
   const v = Number(t);
