@@ -8,14 +8,17 @@ import { computePosition } from '../../domain/position';
 import { latestRecorded, latestBy } from '../../domain/portfolio';
 import { Card, MonthsPicker, useToast } from '../components/common';
 import { parseNumber } from '../../domain/csv';
+import { lookupStock } from '../../data/stockList';
+import { loadSettings } from '../../db/settings';
+import { JQuantsProvider } from '../../data/jquants';
 
 interface FormState {
   country: Country; code: string; name: string; market: Market; account: AccountType;
   quantity: string; avgPrice: string; acquiredDate: string; currentPrice: string; annualDps: string; dpsUndecided: boolean;
-  recordMonths: number[]; payMonths: number[]; memo: string;
+  recordMonths: number[]; payMonths: number[]; memo: string; sector: string;
 }
 
-const empty: FormState = { country: 'JP', code: '', name: '', market: 'TSE_PRIME', account: 'taxable', quantity: '', avgPrice: '', acquiredDate: toYmd(new Date()), currentPrice: '', annualDps: '', dpsUndecided: false, recordMonths: [], payMonths: [], memo: '' };
+const empty: FormState = { country: 'JP', code: '', name: '', market: 'TSE_PRIME', account: 'taxable', quantity: '', avgPrice: '', acquiredDate: toYmd(new Date()), currentPrice: '', annualDps: '', dpsUndecided: false, recordMonths: [], payMonths: [], memo: '', sector: '' };
 
 export default function HoldingForm() {
   const { id } = useParams();
@@ -27,6 +30,8 @@ export default function HoldingForm() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [trashed, setTrashed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [lookup, setLookup] = useState<{ state: 'idle' | 'loading' | 'found' | 'notfound' | 'nolist'; text?: string }>({ state: 'idle' });
+  const [autoName, setAutoName] = useState('');
   const edit = !!secId;
 
   useEffect(() => {
@@ -43,7 +48,7 @@ export default function HoldingForm() {
         country: s.country, code: s.code, name: s.name, market: s.market, account: s.account,
         quantity: String(pos.quantity), avgPrice: pos.avgCost ? String(Math.round(pos.avgCost * 100) / 100) : '', acquiredDate: ts[0]?.date ?? toYmd(new Date()),
         currentPrice: pr ? String(pr.price) : '', annualDps: fc?.annualDps != null ? String(fc.annualDps) : '', dpsUndecided: !!fc && fc.annualDps === null,
-        recordMonths: s.recordMonths, payMonths: s.payMonths, memo: s.memo,
+        recordMonths: s.recordMonths, payMonths: s.payMonths, memo: s.memo, sector: s.sector ?? '',
       });
     })();
   }, [secId]);
@@ -76,7 +81,7 @@ export default function HoldingForm() {
     if (!validate() || saving) return;
     setSaving(true);
     try {
-      const base = { country: f.country, code: f.code.trim().toUpperCase(), name: f.name.trim(), market: f.market, account: f.account, recordMonths: f.recordMonths, payMonths: f.payMonths, memo: f.memo };
+      const base = { country: f.country, code: f.code.trim().toUpperCase(), name: f.name.trim(), market: f.market, account: f.account, recordMonths: f.recordMonths, payMonths: f.payMonths, memo: f.memo, sector: f.sector || undefined };
       let sid = secId;
       if (!edit) {
         const s = await createSecurity(base);
@@ -107,6 +112,39 @@ export default function HoldingForm() {
     } finally { setSaving(false); }
   };
 
+  // 銘柄コードから企業名・市場・業種を自動入力（JPX上場銘柄一覧 → 見つからなければJ-Quants）
+  useEffect(() => {
+    if (edit || f.country !== 'JP') { setLookup({ state: 'idle' }); return; }
+    const code = f.code.trim().toUpperCase();
+    if (!/^[0-9][0-9A-Z]{3}$/.test(code)) { setLookup({ state: 'idle' }); return; }
+    let cancelled = false;
+    setLookup({ state: 'loading' });
+    (async () => {
+      const apply = (name: string, market: Market | null, sector: string, text: string) => {
+        if (cancelled) return;
+        setF((p) => ({ ...p, name: !p.name.trim() || p.name === autoName ? name : p.name, market: market ?? p.market, sector }));
+        setAutoName(name);
+        setLookup({ state: 'found', text });
+      };
+      const { stock, list } = await lookupStock(code);
+      if (stock) return apply(stock.name, stock.market === 'OTHER' ? 'OTHER' : stock.market, stock.sector, `${list!.source}（${list!.asOf}時点）から入力：${stock.marketLabel}${stock.sector ? `・${stock.sector}` : ''}`);
+      const s = await loadSettings();
+      if (s.proxyUrl && navigator.onLine) {
+        try {
+          const info = await new JQuantsProvider(s.proxyUrl, s.proxyToken, s.jquantsPlan).getCompany(code);
+          if (info) {
+            const mk: Market | null = info.marketName.includes('プライム') ? 'TSE_PRIME' : info.marketName.includes('スタンダード') ? 'TSE_STANDARD' : info.marketName.includes('グロース') ? 'TSE_GROWTH' : null;
+            return apply(info.name, mk, info.sector, `J-Quants（JPX公式）から入力：${info.marketName}・${info.sector}`);
+          }
+        } catch { /* 下で未検出として表示 */ }
+      }
+      if (cancelled) return;
+      setF((p) => (autoName && p.name === autoName ? { ...p, name: '', sector: '' } : p));
+      setLookup(list ? { state: 'notfound', text: `${list.source}（${list.asOf}時点）に見つかりません。新規上場の銘柄などは企業名を手入力してください` } : { state: 'nolist', text: '銘柄一覧を読み込めませんでした。企業名を手入力してください' });
+    })();
+    return () => { cancelled = true; };
+  }, [f.code, f.country, edit]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (edit || !f.code.trim()) { setTrashed(null); return; }
     const sid = securityIdOf(f.country, f.code);
@@ -125,8 +163,9 @@ export default function HoldingForm() {
             <input id="code" type="text" inputMode={f.country === 'JP' ? 'text' : 'text'} autoCapitalize="characters" value={f.code} onChange={(e) => set('code', e.target.value)} disabled={edit} placeholder={f.country === 'JP' ? '例: 8058' : '例: KO'} />
             {errors.code && <span className="err">{errors.code}</span>}</div>
         </div>
+        {lookup.state !== 'idle' && <div className={`tiny ${lookup.state === 'found' ? 'muted' : lookup.state === 'loading' ? 'dim' : 'warn'}`} style={{ margin: '-4px 0 12px' }}>{lookup.state === 'loading' ? '銘柄を検索中…' : lookup.text}</div>}
         {trashed && <div className="notice warn" style={{ marginBottom: 12 }}>この銘柄はゴミ箱にあります。<button type="button" className="btn small" onClick={async () => { await restoreSecurity(trashed); nav(`/holdings/${encodeURIComponent(trashed)}`); }}>復元する</button></div>}
-        <div className="field"><label htmlFor="name">企業名</label><input id="name" type="text" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="例: 三菱商事" />{errors.name && <span className="err">{errors.name}</span>}</div>
+        <div className="field"><label htmlFor="name">企業名</label><input id="name" type="text" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder={f.country === 'JP' ? '銘柄コードを入れると自動入力されます' : '例: Coca-Cola'} />{errors.name && <span className="err">{errors.name}</span>}</div>
         <div className="grid2">
           <div className="field"><label>市場</label>
             <select value={f.market} onChange={(e) => set('market', e.target.value as Market)}>

@@ -15,7 +15,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: false,
       includeAssets: ['icons/*.png', 'icons/*.svg'],
-      injectManifest: { rollupFormat: 'iife', globPatterns: ['**/*.{js,css,html,png,svg,woff2}'], maximumFileSizeToCacheInBytes: 4 * 1024 * 1024 },
+      injectManifest: { rollupFormat: 'iife', globPatterns: ['**/*.{js,css,html,png,svg,woff2,json}'], maximumFileSizeToCacheInBytes: 4 * 1024 * 1024 },
       manifest: {
         name: 'カヴ - 保有株・配当金管理',
         short_name: 'カヴ',

@@ -29,6 +29,7 @@
     "vitest": "^3.2.4",
     "workbox-core": "^7.4.1",
     "workbox-precaching": "^7.4.1",
-    "workbox-routing": "^7.4.1"
+    "workbox-routing": "^7.4.1",
+    "xlsx": "^0.18.5"
   }
 }

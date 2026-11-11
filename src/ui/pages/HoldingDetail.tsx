@@ -61,7 +61,7 @@ export default function HoldingDetail() {
         <div className="row between">
           <div className="grow">
             <div style={{ fontSize: 19, fontWeight: 800 }}>{s.name}</div>
-            <div className="tiny muted row wrap" style={{ gap: 6 }}><span className="code">{s.code}</span>{MARKET_LABELS[s.market]}・{s.account === 'nisa' ? 'NISA' : '課税口座'}</div>
+            <div className="tiny muted row wrap" style={{ gap: 6 }}><span className="code">{s.code}</span>{MARKET_LABELS[s.market]}{s.sector ? `・${s.sector}` : ''}・{s.account === 'nisa' ? 'NISA' : '課税口座'}</div>
           </div>
           <Link className="btn small" to={`/holdings/${encodeURIComponent(s.id)}/edit`}>編集</Link>
         </div>

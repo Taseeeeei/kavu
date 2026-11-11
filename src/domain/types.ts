@@ -38,6 +38,8 @@ export interface Security {
   recordMonths: number[]; // 配当権利確定月 (1-12)
   payMonths: number[]; // 配当支払月 (1-12)
   memo: string;
+  /** 33業種（JPX一覧・J-Quantsから自動入力） */
+  sector?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null; // ゴミ箱（論理削除）

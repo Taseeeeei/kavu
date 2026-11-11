@@ -7,6 +7,7 @@ import { computePosition } from '../domain/position';
 import { dividendDedupKey } from '../domain/dividends';
 import { withholdingTax, grossFromDps } from '../domain/tax';
 import { createLocalBackup, setForecastManual } from '../db/repo';
+import { lookupStock } from '../data/stockList';
 
 export const CSV_HEADERS = {
   securities: ['国', '銘柄コード', '企業名', '市場', '口座', '権利確定月', '支払月', 'メモ'],
@@ -64,7 +65,8 @@ async function ensureSecurity(country: Country, code: string, name: string, cach
     cache.set(id, hit); return hit;
   }
   const t = new Date().toISOString();
-  const s: Security = { id, country, code: code.toUpperCase(), name: name || code, market: country === 'US' ? 'US' : 'TSE_PRIME', currency: country === 'US' ? 'USD' : 'JPY', account: 'taxable', recordMonths: [], payMonths: [], memo: '', createdAt: t, updatedAt: t, deletedAt: null };
+  const listed = country === 'JP' ? (await lookupStock(code)).stock : null;
+  const s: Security = { id, country, code: code.toUpperCase(), name: name || listed?.name || code, sector: listed?.sector || undefined, market: country === 'US' ? 'US' : listed?.market ?? 'TSE_PRIME', currency: country === 'US' ? 'USD' : 'JPY', account: 'taxable', recordMonths: [], payMonths: [], memo: '', createdAt: t, updatedAt: t, deletedAt: null };
   await db.securities.put(s);
   cache.set(id, s);
   return s;

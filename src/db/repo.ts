@@ -26,6 +26,7 @@ export interface SecurityInput {
   recordMonths: number[];
   payMonths: number[];
   memo: string;
+  sector?: string;
 }
 
 export class DuplicateError extends Error {}
