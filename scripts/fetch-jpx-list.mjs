@@ -40,9 +40,12 @@ export function convert(buf) {
 }
 
 async function download() {
-  const html = await (await fetch(PAGE, { headers: { 'User-Agent': 'Mozilla/5.0 (kav build)' } })).text();
-  const m = html.match(/href="([^"]*data_j\.xls)"/);
-  if (!m) throw new Error('data_j.xls のリンクが見つかりません');
+  const res0 = await fetch(PAGE, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ja' } });
+  const html = await res0.text();
+  const links = [...html.matchAll(/href=["']([^"']+\.xlsx?)["']/gi)].map((x) => x[1]);
+  const link = links.find((l) => /data_j\.xlsx?$/i.test(l)) ?? links.find((l) => /data_?j/i.test(l));
+  if (!link) throw new Error(`data_j.xls のリンクが見つかりません（status ${res0.status}, ${html.length}文字, xlsリンク: ${links.slice(0, 5).join(' ') || 'なし'}, 先頭: ${html.slice(0, 200).replace(/\s+/g, ' ')}）`);
+  const m = [null, link];
   const url = new URL(m[1], PAGE).href;
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (kav build)' } });
   if (!res.ok) throw new Error(`ダウンロード失敗 ${res.status}`);
