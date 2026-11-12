@@ -184,11 +184,14 @@ export async function recordSnapshot() {
 export const BACKUP_VERSION = 1;
 const TABLES = ['securities', 'trades', 'prices', 'forecasts', 'dividends', 'events', 'snapshots', 'settings'] as const;
 
+/** バックアップに含めない設定（合言葉）。以前の版の proxyToken も除外する */
+const SECRET_KEYS = ['backendToken', 'proxyToken'];
+
 export async function exportJson(): Promise<string> {
   const data: Record<string, unknown[]> = {};
   for (const t of TABLES) {
     let rows = await db.table(t).toArray();
-    if (t === 'settings') rows = rows.filter((r: { key: string }) => r.key !== 'proxyToken');
+    if (t === 'settings') rows = rows.filter((r: { key: string }) => !SECRET_KEYS.includes(r.key));
     data[t] = rows;
   }
   return JSON.stringify({ app: 'kav', version: BACKUP_VERSION, exportedAt: now(), data }, null, 2);
@@ -209,14 +212,15 @@ export async function restoreJson(json: string) {
   const v = validateBackup(json);
   if (!v.ok) throw new Error(v.error);
   await createLocalBackup('復元前の自動バックアップ');
-  const token = await db.settings.get('proxyToken');
+  const secrets = (await db.settings.bulkGet(SECRET_KEYS)).filter((x): x is NonNullable<typeof x> => !!x);
   await db.transaction('rw', TABLES.map((t) => db.table(t)), async () => {
     for (const t of TABLES) {
       await db.table(t).clear();
       const rows = v.data[t] ?? [];
-      if (rows.length) await db.table(t).bulkPut(rows);
+      const keep = t === 'settings' ? rows.filter((r) => !SECRET_KEYS.includes((r as { key: string }).key)) : rows;
+      if (keep.length) await db.table(t).bulkPut(keep);
     }
-    if (token) await db.settings.put(token);
+    if (secrets.length) await db.settings.bulkPut(secrets);
   });
 }
 

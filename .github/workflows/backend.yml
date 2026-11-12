@@ -1,0 +1,61 @@
+name: Deploy backend (Cloudflare Worker + D1)
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**', '.github/workflows/backend.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: backend
+  cancel-in-progress: false
+env:
+  WRANGLER: npx --yes wrangler@4.151.3
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+      APP_TOKEN: ${{ secrets.APP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: シークレットの登録を確認
+        id: check
+        run: |
+          missing=""
+          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID EODHD_API_KEY APP_TOKEN; do
+            [ -z "${!n}" ] && missing="$missing $n"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::未登録のシークレット:$missing（Settings → Secrets and variables → Actions で登録してください）。デプロイを省略します"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: D1データベースを用意
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          find_id() { $WRANGLER d1 list --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s.slice(s.indexOf("[")));const db=j.find(x=>x.name==="kav-db");process.stdout.write(db?db.uuid:"")})'; }
+          ID=$(find_id)
+          if [ -z "$ID" ]; then $WRANGLER d1 create kav-db; ID=$(find_id); fi
+          [ -n "$ID" ] || { echo "::error::D1データベースを作成できませんでした"; exit 1; }
+          sed -i "s/__D1_DATABASE_ID__/$ID/" wrangler.toml
+          $WRANGLER d1 migrations apply kav-db --remote
+      - name: Workerをデプロイ
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          $WRANGLER deploy | tee deploy.log
+          printf '%s' "$EODHD_API_KEY" | $WRANGLER secret put EODHD_API_KEY
+          printf '%s' "$APP_TOKEN" | $WRANGLER secret put APP_TOKEN
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "### バックエンドのURL" >> "$GITHUB_STEP_SUMMARY"
+          echo "${URL:-（ログから読み取れませんでした。Cloudflareのダッシュボード → Workers で確認してください）}" >> "$GITHUB_STEP_SUMMARY"
+          echo "カヴの 設定 → EODHD接続 に、このURLと APP_TOKEN を入力してください。" >> "$GITHUB_STEP_SUMMARY"

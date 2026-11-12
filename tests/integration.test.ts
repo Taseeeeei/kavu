@@ -71,92 +71,39 @@ describe('DB・リポジトリ', () => {
   it('JSONバックアップ→復元で完全に戻る（トークンは含めない）', async () => {
     const s = await createSecurity({ ...base, code: '3333', name: 'C社' });
     await saveTrade({ securityId: s.id, side: 'buy', date: '2024-01-10', quantity: 10, price: 1000, fee: 0, memo: '' });
-    await saveSettings({ proxyToken: 'secret' });
+    await saveSettings({ backendToken: 'secret', backendUrl: 'https://kav.example' });
     const json = await exportJson();
     expect(json).not.toContain('secret');
     await db.trades.clear();
     await restoreJson(json);
     expect(await db.trades.count()).toBe(1);
-    expect((await db.settings.get('proxyToken'))?.value).toBe('secret');
+    expect((await db.settings.get('backendToken'))?.value).toBe('secret');
+    expect((await db.settings.get('backendUrl'))?.value).toBe('https://kav.example');
     expect(await db.backups.count()).toBeGreaterThan(0);
   });
 });
 
-describe('J-Quants 同期（モック）', () => {
-  it('初回は過去の開示を履歴として取込、2回目に新しい増配を検知', async () => {
-    const s = await createSecurity({ ...base, code: '7203', name: 'トヨタ' });
-    await saveTrade({ securityId: s.id, side: 'buy', date: '2024-01-10', quantity: 100, price: 2500, fee: 0, memo: '' });
-    await saveSettings({ proxyUrl: 'https://proxy.test', proxyToken: 't', jquantsPlan: 'premium' });
-    let summaries = [
-      { DiscDate: '2025-05-08', DiscTime: '13:25:00', Code: '72030', CurPerType: 'FY', CurFYEn: '2025-03-31', NxtFYEn: '2026-03-31', DivAnn: '90', NxFDivAnn: '95', DocType: 'FYFinancialStatements_Consolidated_IFRS' },
-    ];
-    const calls: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push(url);
-      expect((init?.headers as Record<string, string>)['x-kav-token']).toBe('t');
-      const u = new URL(url);
-      const body = u.pathname.endsWith('/bars/daily')
-        ? { data: [{ Date: '2026-08-10', C: 2900 }, { Date: '2026-08-11', C: 3000, MktCap: 100 }] }
-        : u.pathname.endsWith('/fins/summary') ? { data: summaries } : { data: [] };
-      return new Response(JSON.stringify(body), { status: 200 });
-    }));
-    const r1 = await syncAll();
-    expect(r1.errors).toEqual([]);
-    expect(r1.prices).toBe(1);
-    expect(r1.historyEvents).toBe(1);
-    expect(r1.newEvents.length).toBe(0);
-    let h = (await loadHoldings())[0];
-    expect(h.price?.price).toBe(3000);
-    expect(h.dayChange).toBe(100);
-    expect(h.annualDps).toBe(95);
-    expect(h.forecast?.source).toBe('jquants');
-    const hist = await db.events.toArray();
-    expect(hist[0]).toMatchObject({ origin: 'history', read: true, before: 90, after: 95 });
-
-    summaries = [...summaries, { DiscDate: '2025-11-05', DiscTime: '13:25:00', Code: '72030', CurPerType: '2Q', CurFYEn: '2026-03-31', FDivAnn: '114', DocType: '2QFinancialStatements_Consolidated_IFRS' } as never];
-    const r2 = await syncAll();
-    expect(r2.newEvents.length).toBe(1);
-    expect(r2.newEvents[0]).toMatchObject({ kind: 'increase', before: 95, after: 114, diffPerShare: 19, annualImpact: 1900, origin: 'auto', read: false, disclosureDate: '2025-11-05', source: 'jquants' });
-    expect(r2.newEvents[0].sourceDetail).toContain('2025-11-05');
-    h = (await loadHoldings())[0];
-    expect(h.annualDps).toBe(114);
-    // 3回目：新しい開示なし → 新規イベントなし（重複通知しない）
-    const r3 = await syncAll();
-    expect(r3.newEvents.length).toBe(0);
-    expect(calls.every((c) => c.startsWith('https://proxy.test/v2/'))).toBe(true);
-    vi.unstubAllGlobals();
-  }, 30000);
-
-  it('プロキシ未設定なら取得せず、その旨を返す', async () => {
+describe('EODHDバックエンドとの接続（フェーズ1）', () => {
+  it('未設定なら取得せず、その旨を返す', async () => {
     const r = await syncAll();
     expect(r.ok).toBe(false);
     expect(r.errors[0]).toContain('未設定');
   });
-});
 
-describe('Googleスプレッドシート（GOOGLEFINANCE）の株価', () => {
-  it('公開CSVから株価・前日終値・日付を取り込み、J-Quantsなしでも動く', async () => {
-    const { parseSheetCsv, checkSheetUrl } = await import('../src/data/sheetPrices');
-    const p = parseSheetCsv('コード,株価,前日終値,時刻\r\n8058,"￥3,012",2990,2026/11/11 15:30:00\r\nTYO:9432,155.2,154.9,\r\n9999,#N/A,#N/A,#N/A\r\n');
-    expect(p.quotes).toEqual([{ code: '8058', price: 3012, prevClose: 2990, date: '2026-11-11' }, { code: '9432', price: 155.2, prevClose: 154.9, date: null }]);
-    expect(p.invalid).toEqual(['9999']);
-    expect(checkSheetUrl('https://docs.google.com/spreadsheets/d/abc/edit#gid=0')).not.toBeNull();
-    expect(checkSheetUrl('https://docs.google.com/spreadsheets/d/e/xyz/pub?gid=0&single=true&output=csv')).toBeNull();
-
-    const s = await createSecurity({ ...base, code: '8058', name: '三菱商事' });
-    await saveTrade({ securityId: s.id, side: 'buy', date: '2024-01-10', quantity: 100, price: 2500, fee: 0, memo: '' });
-    const url = 'https://docs.google.com/spreadsheets/d/e/xyz/pub?output=csv';
-    await saveSettings({ sheetUrl: url, proxyUrl: '' });
-    vi.stubGlobal('fetch', vi.fn(async (u: string) => {
-      expect(u.startsWith(url)).toBe(true);
-      return new Response('コード,株価,前日終値,時刻\n8058,3012,2990,2026/11/11 15:30:00\n', { status: 200 });
+  it('接続済みでも株価は取り込まず、未実装であることを返す（他の取得元に切り替えない）', async () => {
+    await saveSettings({ backendUrl: 'https://kav.example', backendToken: 't' });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer t');
+      return new Response(JSON.stringify({ usage: { used: 3, limit: 20 } }), { status: 200 });
     }));
     const r = await syncAll();
-    expect(r.errors).toEqual([]);
-    expect(r.prices).toBe(1);
-    const h = (await loadHoldings())[0];
-    expect(h.price).toMatchObject({ price: 3012, prevClose: 2990, asOf: '2026-11-11', source: 'gsheet' });
-    expect(h.dayChange).toBe(22);
+    expect(r.ok).toBe(true);
+    expect(r.prices).toBe(0);
+    expect(r.skipped[0]).toContain('未実装');
+    expect(calls).toEqual(['https://kav.example/api/status']);
+    expect(await db.prices.count()).toBe(0);
     vi.unstubAllGlobals();
   });
 });

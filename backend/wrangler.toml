@@ -1,0 +1,23 @@
+# カヴ バックエンド（Cloudflare Worker + D1）
+name = "kav-backend"
+main = "src/index.ts"
+compatibility_date = "2025-10-01"
+
+[vars]
+# PWAを公開しているオリジン（カンマ区切り）。ここ以外のサイトからは使えません
+ALLOWED_ORIGIN = "https://taseeeeei.github.io"
+# EODHD無料プランの1日の呼び出し上限
+DAILY_CALL_LIMIT = "20"
+# 自動取得では使わずに残す回数（手動の確認用）
+CALL_RESERVE = "2"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kav-db"
+# GitHub Actions のデプロイ時に自動で置き換えます（手元で使う場合は wrangler d1 create kav-db で表示されたIDを入れてください）
+database_id = "__D1_DATABASE_ID__"
+migrations_dir = "migrations"
+
+# シークレット（ファイルには書かない）
+#   EODHD_API_KEY : EODHDのAPIキー
+#   APP_TOKEN     : PWAから接続するときの合言葉

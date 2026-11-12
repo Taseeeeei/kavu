@@ -12,18 +12,18 @@ src/domain/    計算ロジック（UIから独立した純粋関数）
   position.ts       売買履歴→保有株数・平均取得単価（移動平均法・一部売却・手数料）
   portfolio.ts      評価額・含み損益・利回り（取得額ベース/時価ベース）・構成比
   dividends.ts      月別/年別/企業別/過去12か月/前年同期比/累計
-  dividendChange.ts 増配・減配・無配・復配の判定、J-Quants開示データからの検出
+  dividendChange.ts 増配・減配・無配・復配の判定
   tax.ts            源泉徴収（所得税15.315%・住民税5%を各々切捨て、NISA非課税）
   jpCalendar.ts     東証営業日・祝日、権利付き最終日/権利落ち日（推定）
   csv.ts            CSVパース/出力（UTF-8 BOM、Shift_JIS読込）
 src/db/        Dexieスキーマ・リポジトリ・設定・バックアップ
-src/data/      外部データ提供元（MarketDataProviderインターフェース、J-Quants実装、外部リンク）
+src/data/      バックエンドとの通信、JPX上場銘柄一覧、外部リンク
 src/services/  同期（自動取得・増減配検知）、通知、CSV入出力、インストール
 src/ui/        画面（ホーム/保有銘柄/配当金/分析/設定/通知）
 src/sw.ts      Service Worker（事前キャッシュ、定期バックグラウンド確認、通知クリック）
-worker/        J-Quants APIプロキシ（Cloudflare Workers）
+backend/       Cloudflare Worker + D1（EODHD API の呼び出し、回数管理、銘柄確認）
 tests/         単体テスト・統合テスト
-e2e/smoke.cjs  スマホ表示のE2E確認
+e2e/           スマホ表示のE2E確認（smoke.cjs, eodhd.cjs）
 ```
 
 ## 開発
@@ -42,22 +42,48 @@ node e2e/smoke.cjs # preview起動中にスマホ表示のE2E確認
 - iPhone: Safariで開く → 共有 → 「ホーム画面に追加」
 - Android / PC(Chrome, Edge): 設定画面の「ホーム画面にインストール」またはブラウザのインストールボタン
 
-## 株価・配当予想の自動取得（任意）
-情報源は **J-Quants API（JPX公式）V2** です。APIキーをフロントエンドに置かないため、同梱のプロキシを使います。
+## 株価・配当の取得（EODHD API）
+株価・配当の取得元は **EODHD API だけ** です。EODHDで取得できなかった場合も、他のサービスやスクレイピングには切り替えず、「未取得」と表示します。
 
-1. https://jpx-jquants.com/ で登録し、ダッシュボードの「API Keys」でAPIキーを発行
-2. `cd worker && npx wrangler deploy`
-3. `npx wrangler secret put JQUANTS_API_KEY`（APIキー）と `npx wrangler secret put ACCESS_TOKEN`（任意の合言葉）
-4. `wrangler.toml` の `ALLOWED_ORIGIN` にアプリの公開オリジンを設定して再デプロイ
-5. アプリの 設定 → データ取得 にプロキシURLと合言葉を入れて「接続テスト」→「今すぐ取得」
+```
+iPhone / PC（PWA）──合言葉──▶ Cloudflare Worker（backend/）──APIキー──▶ EODHD API
+                                     └─ D1（SQLite）に保存・呼び出し回数を記録
+```
+EODHDのAPIキーは Worker のシークレットにだけ置き、PWAやリポジトリには書きません。
 
-注意（2026年11月時点の公式仕様）:
-- 無料プランは**データが12週間遅延**、毎分5リクエスト。Light 60 / Standard 120 / Premium 500（`/fins/summary` は全プラン60/分）。429時は2分以上待機。
-- 使用エンドポイント: `/v2/equities/bars/daily`（株価）、`/v2/equities/master`（企業名・市場）、`/v2/fins/summary`（決算短信サマリー：配当予想 `FDivAnn`/`NxFDivAnn`・実績 `DivAnn`）
-- 増減配検知: 決算短信・配当予想修正の開示ごとに、同じ事業年度の直前予想（予想修正）または前期実績（新年度予想）と比較。初回取得時の過去の変更は「過去の開示から取込」として既読扱いで保存し、2回目以降の新しい開示だけを未確認通知にします。
-- 取得値にはすべて取得日時・情報源（開示日・書類種別・プラン）を保存・表示します。
+### 実装状況
+| 機能 | 状態 |
+| --- | --- |
+| バックエンド（Worker + D1）、APIキー管理、合言葉による認証 | 実装済み（フェーズ1） |
+| 1日の呼び出し回数の管理（上限20回・予備2回を設定値で管理、402/429で停止、/api/user で照合） | 実装済み（フェーズ1） |
+| 対応銘柄の確認（EODHDの取引所一覧・銘柄一覧で確認、実際に日足を取得できたら「対応」に確定） | 実装済み（フェーズ1） |
+| 株価・株価履歴の毎日の取得、チャート、損益 | 未実装（フェーズ2） |
+| 配当履歴の取得、増配・減配の判定 | 未実装（フェーズ3） |
+| 分析・バックアップのD1対応・エラー処理の強化 | 未実装（フェーズ4） |
 
-株探・四季報オンライン・株予報Pro・IRバンク・投資の森は規約に配慮して自動収集せず、銘柄詳細から該当ページへのリンクを提供しています。
+### 準備（初めての方向け）
+1. **EODHDのAPIキー**：https://eodhd.com/ で無料登録し、ダッシュボードに表示されるAPIキーを控えます。
+2. **Cloudflareのアカウント**：https://dash.cloudflare.com/sign-up で無料登録します。左メニューの「Workers & Pages」を一度開き、workers.dev のサブドメインを決めておきます。
+3. **CloudflareのアカウントID**：ダッシュボード右側（またはWorkers & Pagesの画面）にある「Account ID」を控えます。
+4. **CloudflareのAPIトークン**：右上のアイコン →「My Profile」→「API Tokens」→「Create Token」→ テンプレート「Edit Cloudflare Workers」を選び、権限に「Account → D1 → Edit」を追加して作成し、表示されたトークンを控えます。
+5. **合言葉（APP_TOKEN）**：パスワード生成機能などで作った、32文字以上のランダムな文字列を用意します。
+6. GitHub の kavu リポジトリ → Settings → Secrets and variables → Actions →「New repository secret」で、次の4つを登録します。
+   - `EODHD_API_KEY`（1の値）
+   - `CLOUDFLARE_ACCOUNT_ID`（3の値）
+   - `CLOUDFLARE_API_TOKEN`（4の値）
+   - `APP_TOKEN`（5の値）
+7. Actions タブ →「Deploy backend (Cloudflare Worker + D1)」→「Run workflow」を押します。D1データベースの作成・表の作成・Workerのデプロイ・シークレットの登録が自動で行われ、完了画面（Summary）にバックエンドのURLが表示されます。
+8. カヴの 設定 → EODHD接続 に、URLと合言葉を入れて「保存」→「接続テスト」。続けて「EODHDで対応銘柄を確認する（3回使用）」を押します。
+
+### 無料プランの制約（EODHD公式ドキュメントより）
+- 1日20回まで（0:00 GMT＝日本時間9:00にリセット）。データがなかった場合（404）も1回と数えられます。
+- 株価履歴は過去1年分、リアルタイム株価は15〜20分遅れ。ファンダメンタルズ（予想配当など）は無料プランでは使えません。
+- 19銘柄＋指数2つで毎日21回必要になり、上限を超えます。フェーズ2では、データの古い銘柄から順に1日最大18回まで取得し、2回を手動操作用に残します。
+- 国内の投資信託（eMAXIS Slim など）は、EODHDの銘柄記号が確認できるまで「EODHD非対応・未確認」と表示します。
+- 回数の設定は `backend/wrangler.toml` の `DAILY_CALL_LIMIT`・`CALL_RESERVE` で変えられます。
+
+株探・四季報オンライン・株予報Pro・IRバンク・投資の森は自動収集せず、銘柄詳細から該当ページへのリンクを提供しています。
+企業名の自動入力にはJPXの上場銘柄一覧（株価データではありません）を使っています。
 証券会社の配当受取実績は自動取得できないため、手動入力またはCSVインポートで登録します。
 
 ## 通知

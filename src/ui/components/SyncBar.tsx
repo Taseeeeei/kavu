@@ -1,37 +1,25 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useSettings, useOnline } from '../hooks';
-import { syncAll, isSyncConfigured } from '../../services/sync';
-import { dateTime } from '../../domain/format';
-import { useToast } from './common';
-import { IRefresh } from '../icons';
+import { useSettings } from '../hooks';
+import { isSyncConfigured, PRICE_SYNC_IMPLEMENTED } from '../../services/sync';
 
+/** データ取得の状態。実装済みの機能と未実装の機能を区別して表示する */
 export function SyncBar() {
   const s = useSettings();
-  const online = useOnline();
-  const toast = useToast();
-  const [busy, setBusy] = useState<string | null>(null);
   if (!isSyncConfigured(s)) {
     return (
       <div className="sync-bar">
-        <span className="pill gray">自動取得：未設定</span>
-        <span>株価・配当予想は手動入力の値を表示しています。</span>
-        <Link to="/settings#data-source">設定する</Link>
+        <span className="pill gray">EODHD：未接続</span>
+        <span>表示中の株価・配当予想は手動入力などで登録した値です。</span>
+        <Link to="/settings#data-source">接続する</Link>
       </div>
     );
   }
-  const run = async () => {
-    setBusy('開始中…');
-    const r = await syncAll({ onProgress: setBusy });
-    setBusy(null);
-    toast(r.ok ? `更新完了：株価${r.prices}件・配当予想${r.forecasts}件・新しい増減配${r.newEvents.length}件` : `一部取得できませんでした：${r.errors[0] ?? ''}`);
-  };
   return (
     <div className="sync-bar">
-      <span className="pill">{[s.sheetUrl && "スプレッドシート", s.proxyUrl && "J-Quants"].filter(Boolean).join("＋")}</span>
-      <span>最終取得 {dateTime(s.lastSyncAt)}</span>
+      <span className="pill">EODHD接続済み</span>
+      <span>{PRICE_SYNC_IMPLEMENTED ? '' : '株価・配当の自動取り込みは準備中です（次の段階で対応）。表示中の値は手動入力などで登録したものです。'}</span>
       <span className="grow" />
-      <button className="btn small" onClick={run} disabled={!!busy || !online}><IRefresh width={16} height={16} />{busy ?? (online ? '今すぐ更新' : 'オフライン')}</button>
+      <Link to="/settings#data-source">状態を見る</Link>
     </div>
   );
 }

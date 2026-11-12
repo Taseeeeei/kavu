@@ -19,12 +19,14 @@ export const MARKET_LABELS: Record<Market, string> = {
 export type AccountType = 'taxable' | 'nisa';
 
 /** データの出所。表示時に必ず明示する。 */
-export type DataSource = 'manual' | 'jquants' | 'csv' | 'gsheet';
+/** 'jquants' と 'gsheet' は以前の版で保存されたデータの表示用（現在は取得しない） */
+export type DataSource = 'manual' | 'eodhd' | 'csv' | 'jquants' | 'gsheet';
 export const SOURCE_LABELS: Record<DataSource, string> = {
   manual: '手動入力',
-  jquants: 'J-Quants API（JPX公式）',
+  eodhd: 'EODHD API',
+  jquants: 'J-Quants API（以前の版で取得）',
   csv: 'CSVインポート',
-  gsheet: 'Googleスプレッドシート（GOOGLEFINANCE）',
+  gsheet: 'Googleスプレッドシート（以前の版で取得）',
 };
 
 export interface Security {
@@ -38,12 +40,12 @@ export interface Security {
   recordMonths: number[]; // 配当権利確定月 (1-12)
   payMonths: number[]; // 配当支払月 (1-12)
   memo: string;
-  /** 33業種（JPX一覧・J-Quantsから自動入力） */
+  /** 33業種（JPX一覧から自動入力） */
   sector?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null; // ゴミ箱（論理削除）
-  /** J-Quantsで処理済みの最新開示日時（増減配の新規検知の基準） */
+  /** 以前の版（J-Quants）で処理済みの最新開示日時。現在は使わない */
   lastDisclosureKey?: string;
 }
 

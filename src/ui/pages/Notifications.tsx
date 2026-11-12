@@ -28,7 +28,7 @@ export default function Notifications() {
         {unread > 0 && <button className="btn small" onClick={markAll}>すべて確認済みにする</button>}
       </div>
       {list.length === 0 ? (
-        <Card><Empty title="増配・減配の記録はありません" text={<>J-Quants の自動取得を設定すると、保有銘柄の配当予想の変更（増配・減配・無配・復配）を検知して通知します。手動で配当予想を更新した場合も記録されます。<br />確認できていない変更は表示しません。</>} action={<Link className="btn" to="/settings#data-source">自動取得を設定</Link>} /></Card>
+        <Card><Empty title="増配・減配の記録はありません" text={<>EODHDの配当履歴による増配・減配の検知は準備中です。手動で配当予想を更新した場合は記録されます。<br />確認できていない変更は表示しません。</>} action={<Link className="btn" to="/settings#data-source">EODHD接続を見る</Link>} /></Card>
       ) : list.map((e) => (
         <div key={e.id} className={`event ${e.kind} ${e.read ? '' : 'unread'}`} onClick={() => !e.read && db.events.update(e.id, { read: true })}>
           <div className="row between">

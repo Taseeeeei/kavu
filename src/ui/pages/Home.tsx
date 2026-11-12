@@ -33,7 +33,7 @@ export default function Home() {
           <Empty title="カヴへようこそ" text={<>保有株と受け取った配当金を登録すると、ここに資産状況・配当利回り・増配/減配の情報がまとまって表示されます。<br />データはこの端末内（IndexedDB）に保存され、オフラインでも閲覧できます。</>}
             action={<div className="grid2"><Link className="btn primary" to="/holdings/new">保有株を登録</Link><Link className="btn" to="/settings#data">CSV・バックアップから取り込む</Link></div>} />
         </Card>
-        <div className="notice">株価や配当予想を自動で取得するには、設定でJ-Quants API用のプロキシを登録してください。未設定でも手動入力で全機能を使えます。</div>
+        <div className="notice">株価・配当はEODHD APIから取得します（設定 → EODHD接続）。自動の取り込みは準備中のため、現在は手動入力の値で全機能を使えます。</div>
       </>
     );
   }

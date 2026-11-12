@@ -9,8 +9,6 @@ import { latestRecorded, latestBy } from '../../domain/portfolio';
 import { Card, MonthsPicker, useToast } from '../components/common';
 import { parseNumber } from '../../domain/csv';
 import { lookupStock } from '../../data/stockList';
-import { loadSettings } from '../../db/settings';
-import { JQuantsProvider } from '../../data/jquants';
 
 interface FormState {
   country: Country; code: string; name: string; market: Market; account: AccountType;
@@ -112,7 +110,7 @@ export default function HoldingForm() {
     } finally { setSaving(false); }
   };
 
-  // 銘柄コードから企業名・市場・業種を自動入力（JPX上場銘柄一覧 → 見つからなければJ-Quants）
+  // 銘柄コードから企業名・市場・業種を自動入力（JPX上場銘柄一覧。株価データではなく企業名の辞書として使う）
   useEffect(() => {
     if (edit || f.country !== 'JP') { setLookup({ state: 'idle' }); return; }
     const code = f.code.trim().toUpperCase();
@@ -128,16 +126,6 @@ export default function HoldingForm() {
       };
       const { stock, list } = await lookupStock(code);
       if (stock) return apply(stock.name, stock.market === 'OTHER' ? 'OTHER' : stock.market, stock.sector, `${list!.source}（${list!.asOf}時点）から入力：${stock.marketLabel}${stock.sector ? `・${stock.sector}` : ''}`);
-      const s = await loadSettings();
-      if (s.proxyUrl && navigator.onLine) {
-        try {
-          const info = await new JQuantsProvider(s.proxyUrl, s.proxyToken, s.jquantsPlan).getCompany(code);
-          if (info) {
-            const mk: Market | null = info.marketName.includes('プライム') ? 'TSE_PRIME' : info.marketName.includes('スタンダード') ? 'TSE_STANDARD' : info.marketName.includes('グロース') ? 'TSE_GROWTH' : null;
-            return apply(info.name, mk, info.sector, `J-Quants（JPX公式）から入力：${info.marketName}・${info.sector}`);
-          }
-        } catch { /* 下で未検出として表示 */ }
-      }
       if (cancelled) return;
       setF((p) => (autoName && p.name === autoName ? { ...p, name: '', sector: '' } : p));
       setLookup(list ? { state: 'notfound', text: `${list.source}（${list.asOf}時点）に見つかりません。新規上場の銘柄などは企業名を手入力してください` } : { state: 'nolist', text: '銘柄一覧を読み込めませんでした。企業名を手入力してください' });
@@ -199,7 +187,7 @@ export default function HoldingForm() {
           <div className="field"><label htmlFor="dps">1株当たり年間配当（円）</label><input id="dps" type="number" inputMode="decimal" min="0" step="any" value={f.annualDps} disabled={f.dpsUndecided} onChange={(e) => set('annualDps', e.target.value)} placeholder="会社予想" />{errors.annualDps && <span className="err">{errors.annualDps}</span>}</div>
         </div>
         <label className="row small muted" style={{ marginBottom: 12 }}><input type="checkbox" checked={f.dpsUndecided} onChange={(e) => set('dpsUndecided', e.target.checked)} />配当予想は「未定」</label>
-        <div className="hint tiny dim" style={{ marginBottom: 12 }}>入力値は「手動入力」として入力日時とともに保存されます。自動取得を設定すると J-Quants の値で更新されます。</div>
+        <div className="hint tiny dim" style={{ marginBottom: 12 }}>入力値は「手動入力」として入力日時とともに保存されます。EODHDからの自動取り込みは準備中です。</div>
         <div className="field"><label>配当権利確定月</label><MonthsPicker value={f.recordMonths} onChange={(v) => set('recordMonths', v)} /></div>
         <div className="field"><label>配当支払月</label><MonthsPicker value={f.payMonths} onChange={(v) => set('payMonths', v)} /><span className="hint">月別の予想配当・カレンダーで使います（例：3月・9月権利 → 6月・12月支払）</span></div>
       </Card>
